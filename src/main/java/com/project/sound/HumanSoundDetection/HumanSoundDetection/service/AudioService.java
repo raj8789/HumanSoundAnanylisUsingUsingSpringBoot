@@ -1,6 +1,7 @@
 package com.project.sound.HumanSoundDetection.HumanSoundDetection.service;
 
 
+import com.jlibrosa.audio.JLibrosa;
 import com.project.sound.HumanSoundDetection.HumanSoundDetection.entities.SoundAnalysis;
 import com.project.sound.HumanSoundDetection.HumanSoundDetection.repository.SoundAnalysisRepository;
 import lombok.SneakyThrows;
@@ -14,6 +15,7 @@ import org.tensorflow.types.TFloat32;
 
 import javax.sound.sampled.*;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDateTime;
@@ -24,15 +26,20 @@ import java.util.TimerTask;
 @Service
 public class AudioService {
     private final SoundAnalysisRepository repository;
+    private final  MFCCPreprocessor mfccPreprocessor;
     private SavedModelBundle model;
     private ConcreteFunction classifyFunction;
     private static final String OUTPUT_FILE = "src/main/resources/speech_model/recorded_audio.wav";
+
+    public static final String OUTPUT_FILE_MFCC="src/main/resources/speech_model/mfcc_features.csv";
+
     private TargetDataLine microphone;
     private String prediction="";
 
 
-    public AudioService(SoundAnalysisRepository repository) {
+    public AudioService(SoundAnalysisRepository repository,MFCCPreprocessor mfccPreprocessor) {
         this.repository = repository;
+        this.mfccPreprocessor=mfccPreprocessor;
     }
 
     private byte[] loadModel() {
@@ -108,20 +115,57 @@ public class AudioService {
 //        microphone.close();
 
         // Machine Learning Classification
-        float[] mfccFeatures = extractMFCC(buffer);
-        prediction = classifySpeech(mfccFeatures);
-        saveResult(prediction);
+        float[] audioData = convertPCMToFloat(buffer);
+        float[][] mfccFeatures=extractMFCC(audioData);
+        try {
+            saveMFCCToCSV(mfccFeatures);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        mfccPreprocessor.executeMFCCPreProcessor();
+//        prediction = classifySpeech(mfccFeatures);
+//        saveResult(prediction);
     }
 
-    private float[] extractMFCC(byte[] buffer) {
-        float[] audioFeatures = new float[buffer.length];
-        for (int i = 0; i < buffer.length; i++) {
-            audioFeatures[i] = buffer[i] / 32768.0f; // Normalize to range [-1, 1]
+    private float[][] extractMFCC(float[] audioData) {
+        // Initialize JLibrosa
+        JLibrosa jLibrosa = new JLibrosa();
+        // Extract MFCC features
+        int sampleRate = 16000; // Adjust according to your dataset
+        int numMFCC = 13; // Typical number of MFCC coefficients
+        float[][] mfccFeatures = jLibrosa.generateMFCCFeatures(audioData, sampleRate, numMFCC);
+        System.out.println("MFCC Feature Sample:");
+        for (int i = 0; i < Math.min(5, mfccFeatures.length); i++) {
+            System.out.println(java.util.Arrays.toString(mfccFeatures[i]));
+        }
+        return mfccFeatures;
+    }
+    public void saveMFCCToCSV(float[][] mfccFeatures) throws IOException {
+        FileWriter csvWriter = new FileWriter(OUTPUT_FILE_MFCC);
+        for (float[] frame : mfccFeatures) {
+            for (int j = 0; j < frame.length; j++) {
+                csvWriter.append(String.valueOf(frame[j]));
+                if (j < frame.length - 1) csvWriter.append(",");
+            }
+            csvWriter.append("\n");
+        }
+        csvWriter.flush();
+        csvWriter.close();
+    }
+    // Convert 16-bit PCM bytes to float values
+    private  float[] convertPCMToFloat(byte[] buffer) {
+        int sampleCount = buffer.length / 2; // Each sample is 2 bytes (16-bit PCM)
+        float[] audioFeatures = new float[sampleCount];
+        for (int i = 0; i < sampleCount; i++) {
+            int low = buffer[2 * i] & 0xFF; // Least significant byte (LSB)
+            int high = buffer[2 * i + 1] << 8; // Most significant byte (MSB)
+            int sample = high | low; // Combine bytes to form 16-bit sample
+            audioFeatures[i] = sample / 32768.0f; // Normalize to [-1, 1]
         }
         return audioFeatures;
     }
 
-    private String classifySpeech(float[] mfcc) {
+    private String classifySpeech(float[][] mfcc) {
 //        try (TFloat32 inputTensor = TFloat32.tensorOf(Shape.of(1, mfcc.length))) {
 //            Tensor outputTensor = classifyFunction.call(inputTensor);
 //            float prediction = outputTensor.asRawTensor().data().asFloats().getFloat(0);
@@ -129,7 +173,7 @@ public class AudioService {
 //            return prediction > 0.5 ? "Live Speech Detected" : "Recorded Speech Detected";
 //        }
         model = SavedModelBundle.load("src/main/resources/speech_model", "serve");
-        try (TFloat32 inputTensor = TFloat32.tensorOf(StdArrays.ndCopyOf(new float[][]{mfcc}))) {
+        try (TFloat32 inputTensor = TFloat32.tensorOf(StdArrays.ndCopyOf(mfcc))) {
             Tensor output = model.session().runner()
                     .feed("input_layer", inputTensor)
                     .fetch("output_layer")
