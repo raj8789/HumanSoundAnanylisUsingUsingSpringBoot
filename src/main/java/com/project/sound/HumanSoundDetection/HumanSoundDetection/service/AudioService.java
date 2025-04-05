@@ -109,7 +109,7 @@ public class AudioService {
             throw new RuntimeException(e);
         }
         mfccPreprocessor.executeMFCCPreProcessor();
-        //        prediction = classifySpeech(mfccFeatures);
+        prediction = classifySpeech(mfccFeatures);
 //        saveResult(prediction);
     }
     private String classifySpeech(float[][] mfcc) {
