@@ -2,11 +2,12 @@ package com.project.sound.HumanSoundDetection.HumanSoundDetection.controller;
 
 import com.project.sound.HumanSoundDetection.HumanSoundDetection.service.AudioService;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/audio")
+@RequestMapping("/sound")
 public class AudioController {
     private AudioService audioService;
 
@@ -14,8 +15,9 @@ public class AudioController {
         this.audioService = audioService;
     }
 
-    @GetMapping("/analyze")
-    public String analyzeSound() {
+    @GetMapping("/create/{soundType}")
+    public String analyzeSound(@PathVariable String soundType) {
+        audioService.soundType=soundType;
         return audioService.analyzeAudio();
     }
 }

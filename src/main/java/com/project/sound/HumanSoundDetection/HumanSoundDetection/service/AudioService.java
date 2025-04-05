@@ -4,12 +4,12 @@ package com.project.sound.HumanSoundDetection.HumanSoundDetection.service;
 import com.jlibrosa.audio.JLibrosa;
 import com.project.sound.HumanSoundDetection.HumanSoundDetection.entities.SoundAnalysis;
 import com.project.sound.HumanSoundDetection.HumanSoundDetection.repository.SoundAnalysisRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.SneakyThrows;
 import org.springframework.stereotype.Service;
 import org.tensorflow.ConcreteFunction;
 import org.tensorflow.SavedModelBundle;
 import org.tensorflow.Tensor;
-import org.tensorflow.ndarray.Shape;
 import org.tensorflow.ndarray.StdArrays;
 import org.tensorflow.types.TFloat32;
 
@@ -18,7 +18,9 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
-import java.time.LocalDateTime;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -29,28 +31,91 @@ public class AudioService {
     private final  MFCCPreprocessor mfccPreprocessor;
     private SavedModelBundle model;
     private ConcreteFunction classifyFunction;
-    private static final String OUTPUT_FILE = "src/main/resources/speech_model/recorded_audio.wav";
+    private static  String OUTPUT_FILE = "src/main/resources/speech_model/test/";
 
-    public static final String OUTPUT_FILE_MFCC="src/main/resources/speech_model/mfcc_features.csv";
+    public static  String OUTPUT_FILE_MFCC="src/main/resources/speech_model/test/";
+
+    public static String OUTPUT_FILE_TEST_TRAIN="";
+    public static final String SOUND_WAV_FILE_NAME="/recorded_audio.wav";
+    public static final String CSV_FILE_NAME="/mfcc_features.csv";
 
     private TargetDataLine microphone;
     private String prediction="";
+
+    public String soundType="";
+
+    public static String count="";
 
 
     public AudioService(SoundAnalysisRepository repository,MFCCPreprocessor mfccPreprocessor) {
         this.repository = repository;
         this.mfccPreprocessor=mfccPreprocessor;
     }
+    @PostConstruct
+    public void init(){
+        makeInitialFileDirectory();
+    }
+    private void makeInitialFileDirectory(){
+        try {
+            Path path = Paths.get(OUTPUT_FILE+"1");
+            Files.createDirectories(path); // Creates folder if it doesn't exist
+            System.out.println("Folder created at: " + path.toAbsolutePath());
+        } catch (Exception e) {
+            System.err.println("Failed to create folder: " + e.getMessage());
+        }
+        createFileAtGivenPath(OUTPUT_FILE+"1"+SOUND_WAV_FILE_NAME);
+        createFileAtGivenPath(OUTPUT_FILE_MFCC+"1"+CSV_FILE_NAME);
+    }
+    private void makeFileDirectory()
+    {
+        count=String.valueOf (repository.findAll().stream().count()+1);
+        String tempCount=String.valueOf(Integer.parseInt(count)+1);
+        try {
+            OUTPUT_FILE_TEST_TRAIN=OUTPUT_FILE+count;
+            Path path = Paths.get(OUTPUT_FILE+tempCount);
+            Files.createDirectories(path); // Creates folder if it doesn't exist
+            System.out.println("Folder created at: " + path.toAbsolutePath());
+        } catch (Exception e) {
+            System.err.println("Failed to create folder: " + e.getMessage());
+        }
+        createFileAtGivenPath(OUTPUT_FILE+tempCount+SOUND_WAV_FILE_NAME);
+        createFileAtGivenPath(OUTPUT_FILE_MFCC+tempCount+CSV_FILE_NAME);
+        saveResult();
+    }
+    private void createFileAtGivenPath(String filePath){
+        try {
+            Path path = Paths.get(filePath);
+            Files.createFile(path);
+            System.out.println("File created at: " + path.toAbsolutePath());
+        } catch (Exception e) {
+            System.err.println("Failed to create file: " + e.getMessage());
+        }
+    }
 
     private byte[] loadModel() {
-        String filename="speech_model/recorded_audio.wav";
-        try (InputStream inputStream = Thread.currentThread().getContextClassLoader().getResourceAsStream(filename)) {
-            if (inputStream == null) throw new IOException("File not found: " + filename);
-            return inputStream.readAllBytes();
+        String relativePath = "src/main/resources/speech_model/test/" + count + "/recorded_audio.wav";
+        String absolutePath = new File(relativePath).getAbsolutePath();
+        try {
+            //  First, try to load from classpath (resources folder)
+            InputStream inputStream = getClass().getClassLoader().getResourceAsStream(relativePath);
+            if (inputStream != null) {
+                return inputStream.readAllBytes();
+            }
+            //  If not found in classpath, try loading from filesystem
+            Path filePath = Paths.get(absolutePath);
+            if (Files.exists(filePath)) {
+                return Files.readAllBytes(filePath);
+            }
+            //  Try loading using different class loaders
+            inputStream = Thread.currentThread().getContextClassLoader().getResourceAsStream(relativePath);
+            if (inputStream != null) {
+                return inputStream.readAllBytes();
+            }
+            //  If all fails, throw an error
+            throw new IOException("File not found: " + relativePath);
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Error loading file: " + absolutePath, e);
         }
-
     }
     private void scheduleTaskStartSoundRecording(){
         Timer timer = new Timer();
@@ -67,6 +132,7 @@ public class AudioService {
 
     public String analyzeAudio() {
         try {
+            makeFileDirectory();
             scheduledTask();
             if(prediction.isEmpty()){
                 return "Error analyzing sound: ";
@@ -124,7 +190,7 @@ public class AudioService {
         }
         mfccPreprocessor.executeMFCCPreProcessor();
 //        prediction = classifySpeech(mfccFeatures);
-//        saveResult(prediction);
+       // saveResult();
     }
 
     private float[][] extractMFCC(float[] audioData) {
@@ -141,11 +207,16 @@ public class AudioService {
         return mfccFeatures;
     }
     public void saveMFCCToCSV(float[][] mfccFeatures) throws IOException {
-        FileWriter csvWriter = new FileWriter(OUTPUT_FILE_MFCC);
+        FileWriter csvWriter = new FileWriter(OUTPUT_FILE_MFCC+count+CSV_FILE_NAME);
         for (float[] frame : mfccFeatures) {
             for (int j = 0; j < frame.length; j++) {
                 csvWriter.append(String.valueOf(frame[j]));
-                if (j < frame.length - 1) csvWriter.append(",");
+                csvWriter.append(",");
+            }
+            if(soundType.equalsIgnoreCase("live")||soundType.equalsIgnoreCase("recorded")){
+                  csvWriter.append(soundType.toLowerCase());
+            }else{
+                csvWriter.append("recorded");
             }
             csvWriter.append("\n");
         }
@@ -184,8 +255,8 @@ public class AudioService {
         }
     }
 
-    private void saveResult(String result) {
-        repository.save(new SoundAnalysis(result, LocalDateTime.now()));
+    private void saveResult() {
+        repository.save(new SoundAnalysis());
     }
     @SneakyThrows
     public void recordAudio() {
@@ -196,7 +267,7 @@ public class AudioService {
         microphone.start();
         System.out.println("Recording...");
         AudioInputStream audioStream = new AudioInputStream(microphone);
-        File outputFile = new File(OUTPUT_FILE);
+        File outputFile = new File(OUTPUT_FILE+count+SOUND_WAV_FILE_NAME);
         AudioSystem.write(audioStream, AudioFileFormat.Type.WAVE, outputFile);
         System.out.println("Recording2...");
     }

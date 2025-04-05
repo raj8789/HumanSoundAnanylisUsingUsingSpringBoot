@@ -19,13 +19,12 @@ import java.util.List;
 @Service
 public class MFCCPreprocessor {
 
-    private static final String OUTPUT_FILE_="src/main/resources/speech_model/";
     public void executeMFCCPreProcessor(){
        // String filePath = "mfcc_features.csv"; // Update your file path
         List<double[]> featureList = new ArrayList<>();
         List<Integer> labelList = new ArrayList<>();
         //  Load CSV File
-        try (Reader reader = Files.newBufferedReader(Paths.get(AudioService.OUTPUT_FILE_MFCC));
+        try (Reader reader = Files.newBufferedReader(Paths.get(AudioService.OUTPUT_FILE_MFCC+AudioService.count+AudioService.CSV_FILE_NAME));
              CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT)) {
             for (CSVRecord record : csvParser) {
                 int numColumns = record.size();
@@ -57,10 +56,10 @@ public class MFCCPreprocessor {
         List<Integer> testLabels = labelList.subList(splitIndex, labelList.size());
 
         // Save processed data
-        saveToFile( OUTPUT_FILE_+"X_train.txt", trainFeatures);
-        saveToFile(OUTPUT_FILE_+"X_test.txt", testFeatures);
-        saveToFile(OUTPUT_FILE_+"y_train.txt", trainLabels);
-        saveToFile(OUTPUT_FILE_+"y_test.txt", testLabels);
+        saveToFile( AudioService.OUTPUT_FILE_TEST_TRAIN+"/X_train.txt", trainFeatures);
+        saveToFile(AudioService.OUTPUT_FILE_TEST_TRAIN+"/X_test.txt", testFeatures);
+        saveToFile(AudioService.OUTPUT_FILE_TEST_TRAIN+"/y_train.txt", trainLabels);
+        saveToFile(AudioService.OUTPUT_FILE_TEST_TRAIN+"/y_test.txt", testLabels);
 
         System.out.println("Preprocessing Completed! Train/Test Data Saved.");
     }
