@@ -3,18 +3,21 @@ package com.project.sound.HumanSoundDetection.HumanSoundDetection.service;
 import com.jlibrosa.audio.JLibrosa;
 import com.project.sound.HumanSoundDetection.HumanSoundDetection.entities.SoundAnalysis;
 import com.project.sound.HumanSoundDetection.HumanSoundDetection.repository.SoundAnalysisRepository;
+import jakarta.annotation.PreDestroy;
 import lombok.SneakyThrows;
 import org.springframework.stereotype.Service;
+import org.tensorflow.GraphOperation;
+import org.tensorflow.Operation;
 import org.tensorflow.SavedModelBundle;
 import org.tensorflow.Tensor;
 import org.tensorflow.ndarray.StdArrays;
+import org.tensorflow.ndarray.buffer.FloatDataBuffer;
 import org.tensorflow.types.TFloat32;
 
 import javax.sound.sampled.*;
 import java.io.*;
 import java.time.LocalDateTime;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.Iterator;
 
 @Service
 public class AudioService {
@@ -22,6 +25,7 @@ public class AudioService {
     private final MFCCPreprocessor mfccPreprocessor;
     private SavedModelBundle model;
 
+    private static final String MODEL_PATH = "src/main/resources/speech_model";
     private static final String OUTPUT_FILE = "src/main/resources/speech_model/recorded_audio.wav";
     public static final String OUTPUT_FILE_MFCC = "src/main/resources/speech_model/mfcc_features.csv";
 
@@ -31,6 +35,12 @@ public class AudioService {
     public AudioService(SoundAnalysisRepository repository, MFCCPreprocessor mfccPreprocessor) {
         this.repository = repository;
         this.mfccPreprocessor = mfccPreprocessor;
+        // Load model at initialization
+        try {
+            this.model = SavedModelBundle.load(MODEL_PATH, "serve");
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to load TensorFlow model", e);
+        }
     }
 
     public String analyzeAudio() {
@@ -62,7 +72,7 @@ public class AudioService {
             oldFile.delete();
         }
 
-        AudioFormat format = new AudioFormat(16000, 16, 2, true, true);
+        AudioFormat format = new AudioFormat(16000, 16, 1, true, true);
         DataLine.Info info = new DataLine.Info(TargetDataLine.class, format);
 
         if (microphone != null) {
@@ -108,17 +118,63 @@ public class AudioService {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        mfccPreprocessor.executeMFCCPreProcessor();
+       // mfccPreprocessor.executeMFCCPreProcessor();
+
         prediction = classifySpeech(mfccFeatures);
 //        saveResult(prediction);
     }
     private String classifySpeech(float[][] mfcc) {
-//        try (TFloat32 inputTensor = TFloat32.tensorOf(Shape.of(1, mfcc.length))) {
-//            Tensor outputTensor = classifyFunction.call(inputTensor);
-//            float prediction = outputTensor.asRawTensor().data().asFloats().getFloat(0);
+
+        try (TFloat32 inputTensor = TFloat32.tensorOf(StdArrays.ndCopyOf(mfcc))) {
+            System.out.println("Model operations:");
+            for (Iterator<GraphOperation> it = model.graph().operations(); it.hasNext(); ) {
+                Operation op = it.next();
+                System.out.println(op.name());
+            }
+            System.out.println("*******************");
+            Tensor output = model.session().runner()
+                    .feed("serving_default_serving_default_input_1", inputTensor)  // Updated input tensor name
+                    .fetch("StatefulPartitionedCall")                              // Updated output tensor name
+                    .run()
+                    .get(0);
 //
-//            return prediction > 0.5 ? "Live Speech Detected" : "Recorded Speech Detected";
-//        }
+//            float prediction = output.asRawTensor().data().asFloats().getFloat(0);
+//            return prediction > 0.5 ? "Live Speech" : "Recorded Speech";
+
+
+            FloatDataBuffer buffer = output.asRawTensor().data().asFloats();
+            float first = buffer.getFloat(0);  // live
+            float second = buffer.getFloat(1); // recorded
+
+            return first > second ? "Live Speech" : "Recorded Speech";
+        } catch (Exception e) {
+            throw new RuntimeException("Error during speech classification: " + e.getMessage(), e);
+        }
+    }
+    private float[][] extractMFCC(float[] audioData) {
+        JLibrosa jLibrosa = new JLibrosa();
+        int sampleRate = 16000;
+        int numMFCC = 20;  // Make sure this matches the Python model's input size
+
+        float[][] mfccFeatures = jLibrosa.generateMFCCFeatures(audioData, sampleRate, numMFCC);
+
+        // Average across time frames
+        float[] averagedMFCC = new float[numMFCC];
+        for (float[] frame : mfccFeatures) {
+            for (int i = 0; i < numMFCC; i++) {
+                averagedMFCC[i] += frame[i];
+            }
+        }
+        for (int i = 0; i < numMFCC; i++) {
+            averagedMFCC[i] /= mfccFeatures.length;
+        }
+        // Prepare input for model: [1][20]
+        float[][] modelInput = new float[1][numMFCC];
+        modelInput[0] = averagedMFCC;
+
+        return modelInput;
+    }
+    private String classifySpeech2(float[][] mfcc) {
         model = SavedModelBundle.load("src/main/resources/speech_model", "serve");
         try (TFloat32 inputTensor = TFloat32.tensorOf(StdArrays.ndCopyOf(mfcc))) {
             Tensor output = model.session().runner()
@@ -143,17 +199,30 @@ public class AudioService {
         }
     }
 
-    private float[][] extractMFCC(float[] audioData) {
+    private float[][] extractMFCC2(float[] audioData) {
+
         JLibrosa jLibrosa = new JLibrosa();
         int sampleRate = 16000;
-        int numMFCC = 13;
+        int numMFCC = 20; //
+
         float[][] mfccFeatures = jLibrosa.generateMFCCFeatures(audioData, sampleRate, numMFCC);
-        System.out.println("MFCC Feature Sample:");
-        for (int i = 0; i < Math.min(5, mfccFeatures.length); i++) {
-            System.out.println(java.util.Arrays.toString(mfccFeatures[i]));
+
+        // Average across time frames (if needed)
+        float[] averagedMFCC = new float[numMFCC];
+        for (float[] frame : mfccFeatures) {
+            for (int i = 0; i < numMFCC; i++) {
+                averagedMFCC[i] += frame[i];
+            }
         }
-        System.out.println("Extracted MFCC Features.");
-        return mfccFeatures;
+        for (int i = 0; i < numMFCC; i++) {
+            averagedMFCC[i] /= mfccFeatures.length;
+        }
+
+        // Prepare input for model: [1][20]
+        float[][] modelInput = new float[1][numMFCC];
+        modelInput[0] = averagedMFCC;
+
+        return modelInput;
     }
 
     private void saveMFCCToCSV(float[][] mfccFeatures) throws IOException {
@@ -162,7 +231,7 @@ public class AudioService {
             oldFile.delete();
         }
         try {
-            Thread.sleep(1000);
+            Thread.sleep(2000);
         } catch (InterruptedException e) {
 
         }
@@ -200,5 +269,11 @@ public class AudioService {
             Thread.sleep(500);
         }
         System.out.println("Warning: File not found or empty after timeout.");
+    }
+    @PreDestroy
+    public void cleanup() {
+        if (model != null) {
+            model.close();
+        }
     }
 }
